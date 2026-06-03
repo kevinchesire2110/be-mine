@@ -1,0 +1,418 @@
+"""
+💕 will_you_be_mine.py — A Special Question for Terry
+=====================================================
+HOW TO RUN:
+  1. Make sure Python 3 is installed (Tkinter comes built-in).
+  2. Place  terry.jpeg  in the SAME folder as this script.
+  3. In your terminal run:
+       python will_you_be_mine.py
+  4. That's it — good luck! 🎉
+"""
+
+import tkinter as tk
+from tkinter import messagebox
+import random
+import math
+import os
+from pathlib import Path
+
+# Try to import Pillow for photo support (optional but recommended)
+try:
+    from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageFilter # pyright: ignore[reportMissingImports]
+    PIL_OK = True
+except ImportError:
+    PIL_OK = False
+
+# ── Palette ───────────────────────────────────────────────────────────────────
+BG          = "#ff4f66"
+ACCENT      = "#ff6b9d"
+ACCENT2     = "#000000"
+TEXT_MAIN   = "#4a1942"
+TEXT_SUB    = "#9b4f7e"
+YES_BG      = "#ff6b9d"
+YES_HOV     = "#ff4080"
+NO_BG       = "#d6d6e8"
+NO_HOV      = "#b0b0cc"
+WIN_W       = 720
+WIN_H       = 560
+CONFETTI_COLORS = [
+    "#ff6b9d","#ff9ecd","#ffd6e8","#c44b8a",
+    "#ffb347","#ffe066","#a8edea","#9b59b6",
+    "#f9ca24","#6ab04c","#eb4d4b","#30336b",
+]
+
+# ── Main App ──────────────────────────────────────────────────────────────────
+class GirlfriendApp:
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title("A Special Question <3")
+        self.root.resizable(False, False)
+        self.root.configure(bg=BG)
+        self._center(WIN_W, WIN_H)
+
+        self.confetti_items: list = []
+        self.sparkle_items:  list = []
+        self.floating_hearts: list = []
+        self.animating = False
+        self._no_escaped = 0
+        self._no_timeout_id = None
+        self._photo_img = None   # keep reference to avoid GC
+
+        # Track mouse position continuously for No-button fleeing
+        self._mouse_x = WIN_W // 2
+        self._mouse_y = WIN_H // 2
+        self.root.bind("<Motion>", self._on_mouse_move)
+
+        self._build_question_screen()
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    def _center(self, w, h):
+        self.root.update_idletasks()
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        self.root.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
+
+    def _clear(self):
+        if self._no_timeout_id:
+            self.root.after_cancel(self._no_timeout_id)
+            self._no_timeout_id = None
+        for w in self.root.winfo_children():
+            w.destroy()
+
+    def _on_mouse_move(self, event):
+        """Continuously track the mouse and push the No button away."""
+        self._mouse_x = event.x
+        self._mouse_y = event.y
+        if hasattr(self, 'no_btn') and self.no_btn.winfo_exists():
+            self._push_no_away()
+
+    # ── Photo loading ─────────────────────────────────────────────────────────
+    def _load_photo(self, size=160):
+        """Load Terry's photo, crop to circle, add pink border ring."""
+        script_dir = Path(__file__).parent
+        img_path = script_dir / "terry.jpeg"
+        if not img_path.exists():
+            return None
+        if not PIL_OK:
+            # Fallback: plain tkinter PhotoImage (no circular crop)
+            try:
+                img = tk.PhotoImage(file=str(img_path))
+                # Scale down roughly
+                factor = max(img.width() // size, img.height() // size, 1)
+                img = img.subsample(factor, factor)
+                return img
+            except Exception:
+                return None
+
+        # PIL path — circular crop + glow border
+        img = Image.open(img_path).convert("RGBA")
+        # Crop to square from centre
+        w, h = img.size
+        m = min(w, h)
+        img = img.crop(((w-m)//2, (h-m)//2, (w+m)//2, (h+m)//2))
+        img = img.resize((size, size), Image.LANCZOS)
+
+        # Create circular mask
+        mask = Image.new("L", (size, size), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, size-1, size-1), fill=255)
+        img.putalpha(mask)
+
+        # Compose onto a pink-bordered circle background
+        border = 6
+        total = size + border * 2
+        bg = Image.new("RGBA", (total, total), (0, 0, 0, 0))
+        # Draw pink ring
+        ring_draw = ImageDraw.Draw(bg)
+        ring_draw.ellipse((0, 0, total-1, total-1), fill="#ff6b9d")
+        ring_draw.ellipse((border, border, total-border-1, total-border-1), fill=(255,240,245,255))
+        bg.paste(img, (border, border), img)
+
+        return ImageTk.PhotoImage(bg)
+
+    # ── Question screen ───────────────────────────────────────────────────────
+    def _build_question_screen(self):
+        self._clear()
+        self.animating = False
+
+        # Background hearts canvas (lowest layer)
+        self.bg_canvas = tk.Canvas(
+            self.root, width=WIN_W, height=WIN_H,
+            bg=BG, highlightthickness=0
+        )
+        self.bg_canvas.place(x=0, y=0)
+        self.floating_hearts = []
+        for _ in range(22):
+            self._spawn_bg_heart()
+        self._animate_bg_hearts()
+
+        # ── Photo on the left ─────────────────────────────────────────────
+        photo = self._load_photo(size=170)
+        if photo:
+            self._photo_img = photo
+            photo_lbl = tk.Label(
+                self.root, image=photo,
+                bg=BG, bd=0, relief="flat"
+            )
+            photo_lbl.place(x=42, rely=0.5, anchor="w")
+        else:
+            # Placeholder heart if no photo / no PIL
+            tk.Label(
+                self.root, text="💗", font=("Arial", 72),
+                bg=BG
+            ).place(x=42, rely=0.5, anchor="w")
+
+        # ── Right-side content ────────────────────────────────────────────
+        # Decorative hearts strip
+        tk.Label(
+            self.root, text="💗  💕  💗  💕  💗",
+            font=("Georgia", 15), bg=BG, fg=ACCENT
+        ).place(x=WIN_W//2 + 60, rely=0.10, anchor="center")
+
+        # Main question
+        tk.Label(
+            self.root,
+            text="Terry, will you be\nmy girlfriend?",
+            font=("Georgia", 26, "bold"),
+            bg=BG, fg=TEXT_MAIN,
+            justify="center",
+        ).place(x=WIN_W//2 + 60, rely=0.36, anchor="center")
+
+        # Sub-text
+        tk.Label(
+            self.root,
+            text="(think carefully before answering 😉)",
+            font=("Georgia", 10, "italic"),
+            bg=BG, fg=TEXT_SUB,
+        ).place(x=WIN_W//2 + 60, rely=0.53, anchor="center")
+
+        # ── Yes button (fixed) ────────────────────────────────────────────
+        self.yes_btn = tk.Button(
+            self.root, text="Yes  💖",
+            command=self._on_yes,
+            font=("Georgia", 14, "bold"),
+            bg=YES_BG, fg="white",
+            activebackground=YES_HOV,
+            relief="flat", cursor="hand2",
+            padx=26, pady=10, bd=0,
+            highlightthickness=2,
+            highlightbackground=ACCENT,
+        )
+        self.yes_btn.place(x=WIN_W//2 + 10, rely=0.70, anchor="center")
+        self.yes_btn.bind("<Enter>", lambda e: self.yes_btn.configure(bg=YES_HOV))
+        self.yes_btn.bind("<Leave>", lambda e: self.yes_btn.configure(bg=YES_BG))
+
+        # ── No button (free-floating, flees mouse) ────────────────────────
+        self.no_btn = tk.Button(
+            self.root, text="No",
+            command=lambda: None,   # can never be clicked — always runs
+            font=("Georgia", 14, "bold"),
+            bg=NO_BG, fg=TEXT_MAIN,
+            activebackground=NO_HOV,
+            relief="flat", cursor="hand2",
+            padx=26, pady=10, bd=0,
+            highlightthickness=2,
+            highlightbackground="#b0b0cc",
+        )
+        # Start position: right of Yes button
+        self.no_btn.place(x=WIN_W//2 + 130, rely=0.70, anchor="center")
+        self._no_x = WIN_W//2 + 130
+        self._no_y = int(WIN_H * 0.70)
+
+        # Bottom sparkle strip
+        tk.Label(
+            self.root, text="✨  💝  ✨",
+            font=("Georgia", 13), bg=BG, fg=ACCENT
+        ).place(relx=0.5, rely=0.92, anchor="center")
+
+    # ── No-button flee logic ──────────────────────────────────────────────────
+    def _push_no_away(self):
+        """Move No button in the direction OPPOSITE to the mouse."""
+        if not self.no_btn.winfo_exists():
+            return
+
+        btn_w = self.no_btn.winfo_reqwidth()
+        btn_h = self.no_btn.winfo_reqheight()
+
+        # Vector from mouse to button centre
+        dx = self._no_x - self._mouse_x
+        dy = self._no_y - self._mouse_y
+        dist = math.hypot(dx, dy)
+
+        # Only flee when mouse is within 140 px
+        FLEE_RADIUS = 140
+        if dist > FLEE_RADIUS or dist < 1:
+            return
+
+        # Normalise and scale the push
+        push = (FLEE_RADIUS - dist) / FLEE_RADIUS * 28
+        nx = self._no_x + (dx / dist) * push
+        ny = self._no_y + (dy / dist) * push
+
+        # Keep within window bounds (leave a margin)
+        margin = 10
+        nx = max(btn_w // 2 + margin, min(WIN_W - btn_w // 2 - margin, nx))
+        ny = max(btn_h // 2 + margin, min(WIN_H - btn_h // 2 - margin, ny))
+
+        self._no_x = nx
+        self._no_y = ny
+        self.no_btn.place(x=int(nx), y=int(ny), anchor="center")
+
+        # Count escapes and taunt her occasionally
+        self._no_escaped += 1
+        taunts = {
+            15: "Haha, you can't catch it! 😄",
+            40: "Still trying? Bold strategy 😂",
+            80: "The answer is YES. Accept it 💕",
+           130: "This button doesn't believe in itself 🙈",
+        }
+        if self._no_escaped in taunts:
+            self._flash_message(taunts[self._no_escaped])
+
+    def _flash_message(self, text: str):
+        lbl = tk.Label(
+            self.root, text=text,
+            font=("Georgia", 11, "italic"),
+            bg="#ffe0ee", fg=ACCENT2,
+            padx=10, pady=6, relief="flat",
+        )
+        lbl.place(relx=0.5, rely=0.84, anchor="center")
+        self.root.after(2400, lambda: lbl.destroy() if lbl.winfo_exists() else None)
+
+    # ── Background hearts ─────────────────────────────────────────────────────
+    def _spawn_bg_heart(self):
+        x = random.randint(20, WIN_W - 20)
+        y = random.randint(-50, WIN_H)
+        size = random.choice([11, 15, 19, 23])
+        char = random.choice(["💗","💕","💓","🩷","❤️"])
+        item = self.bg_canvas.create_text(
+            x, y, text=char,
+            font=("Arial", size), fill=ACCENT,
+        )
+        self.floating_hearts.append({
+            "id": item,
+            "speed": random.uniform(0.35, 1.0),
+            "drift": random.uniform(-0.4, 0.4),
+        })
+
+    def _animate_bg_hearts(self):
+        if not hasattr(self, 'bg_canvas') or not self.bg_canvas.winfo_exists():
+            return
+        resets = []
+        for h in self.floating_hearts:
+            self.bg_canvas.move(h["id"], h["drift"], h["speed"])
+            coords = self.bg_canvas.coords(h["id"])
+            if coords and coords[1] > WIN_H + 10:
+                resets.append(h)
+        for h in resets:
+            self.bg_canvas.coords(h["id"], random.randint(20, WIN_W-20), -20)
+        self.root.after(30, self._animate_bg_hearts)
+
+    # ── Yes → Celebration ─────────────────────────────────────────────────────
+    def _on_yes(self):
+        self._clear()
+        self.animating = True
+        self.confetti_items = []
+        self.sparkle_items  = []
+
+        self.canvas = tk.Canvas(
+            self.root, width=WIN_W, height=WIN_H,
+            bg=BG, highlightthickness=0
+        )
+        self.canvas.pack(fill="both", expand=True)
+
+        # Show Terry's photo centred with a bigger size on celebration screen
+        photo2 = self._load_photo(size=120)
+        if photo2:
+            self._photo_img2 = photo2   # prevent GC
+            self.canvas.create_image(WIN_W // 2, 90, image=photo2, anchor="center")
+
+        self.canvas.create_text(
+            WIN_W // 2, 195,
+            text="Thank you!  ❤️",
+            font=("Georgia", 34, "bold"),
+            fill=ACCENT2,
+            tags="thanks",
+        )
+        self.canvas.create_text(
+            WIN_W // 2, 242,
+            text="You've made me the happiest person alive 🥹",
+            font=("Georgia", 13, "italic"),
+            fill=TEXT_SUB,
+        )
+
+        for _ in range(80):
+            self._spawn_confetti()
+        for _ in range(22):
+            self._spawn_sparkle()
+
+        self._animate_celebration()
+
+    # ── Confetti ──────────────────────────────────────────────────────────────
+    def _spawn_confetti(self, y_start=None):
+        x = random.randint(0, WIN_W)
+        y = y_start if y_start is not None else random.randint(-WIN_H, 0)
+        w = random.randint(6, 14)
+        h = random.randint(6, 14)
+        color = random.choice(CONFETTI_COLORS)
+        if random.random() < 0.5:
+            item = self.canvas.create_rectangle(x, y, x+w, y+h, fill=color, outline="")
+        else:
+            item = self.canvas.create_oval(x, y, x+w, y+h, fill=color, outline="")
+        self.confetti_items.append({
+            "id": item,
+            "speed": random.uniform(2.0, 5.0),
+            "drift": random.uniform(-1.2, 1.2),
+            "wiggle": random.uniform(0, math.pi * 2),
+        })
+
+    # ── Sparkles ──────────────────────────────────────────────────────────────
+    def _spawn_sparkle(self):
+        x = random.randint(20, WIN_W - 20)
+        y = random.randint(20, WIN_H - 20)
+        chars = ["✨","💖","🌸","⭐","💫","🩷","❣️","🎉"]
+        item = self.canvas.create_text(
+            x, y, text=random.choice(chars),
+            font=("Arial", random.randint(14, 26)),
+        )
+        self.sparkle_items.append({"id": item, "life": random.randint(20, 60)})
+
+    # ── Celebration loop ──────────────────────────────────────────────────────
+    def _animate_celebration(self):
+        if not self.animating:
+            return
+
+        dead_c = []
+        for c in self.confetti_items:
+            c["wiggle"] += 0.08
+            dx = c["drift"] + 0.6 * math.sin(c["wiggle"])
+            self.canvas.move(c["id"], dx, c["speed"])
+            coords = self.canvas.coords(c["id"])
+            if coords and coords[1] > WIN_H + 10:
+                dead_c.append(c)
+        for c in dead_c:
+            self.canvas.delete(c["id"])
+            self.confetti_items.remove(c)
+            self._spawn_confetti(y_start=random.randint(-40, -5))
+
+        dead_s = [s for s in self.sparkle_items if s["life"] <= 0]
+        for s in dead_s:
+            self.canvas.delete(s["id"])
+            self.sparkle_items.remove(s)
+        for s in self.sparkle_items:
+            s["life"] -= 1
+        while len(self.sparkle_items) < 22:
+            self._spawn_sparkle()
+
+        # Pulse the thank-you text
+        t = self.root.tk.call("clock", "milliseconds")
+        size = int(34 + 2.5 * math.sin(int(t) / 380))
+        self.canvas.itemconfigure("thanks", font=("Georgia", max(28, size), "bold"))
+
+        self.root.after(28, self._animate_celebration)
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    root = tk.Tk()
+    app  = GirlfriendApp(root)
+    root.mainloop()
